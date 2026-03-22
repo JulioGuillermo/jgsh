@@ -38,9 +38,18 @@ func IsPasswordPrompt(output string) bool {
 	return false
 }
 
-// FoldCarriageReturns processes a string and simulates terminal behavior for \r.
+// FoldCarriageReturns processes a string and simulates terminal behavior for \r, \b and clear sequences.
 func FoldCarriageReturns(input string) string {
-	if !strings.Contains(input, "\r") {
+	// Check for clear screen/line sequences
+	if strings.Contains(input, "\x1b[2J") || strings.Contains(input, "\x1b[H") {
+		// If clear screen is requested, we take only the content after the last clear
+		parts := strings.Split(input, "\x1b[2J")
+		input = parts[len(parts)-1]
+		parts = strings.Split(input, "\x1b[H")
+		input = parts[len(parts)-1]
+	}
+
+	if !strings.ContainsAny(input, "\r\b") {
 		return input
 	}
 
@@ -48,24 +57,34 @@ func FoldCarriageReturns(input string) string {
 	var result []string
 
 	for _, line := range lines {
-		if !strings.Contains(line, "\r") {
+		if !strings.ContainsAny(line, "\r\b") {
 			result = append(result, line)
 			continue
 		}
 
-		// Handle \r by keeping only the text after the last \r
-		// but only if it's not at the very end.
-		parts := strings.Split(line, "\r")
-		// The actual terminal behavior is more complex (overwriting character by character),
-		// but for progress bars, the last part is almost always what we want.
-		lastPart := ""
-		for i := len(parts) - 1; i >= 0; i-- {
-			if strings.TrimSpace(parts[i]) != "" || i == 0 {
-				lastPart = parts[i]
-				break
+		var processed []rune
+		cursor := 0
+
+		runes := []rune(line)
+		for j := 0; j < len(runes); j++ {
+			r := runes[j]
+			switch r {
+			case '\r':
+				cursor = 0
+			case '\b':
+				if cursor > 0 {
+					cursor--
+				}
+			default:
+				if cursor < len(processed) {
+					processed[cursor] = r
+				} else {
+					processed = append(processed, r)
+				}
+				cursor++
 			}
 		}
-		result = append(result, lastPart)
+		result = append(result, string(processed))
 	}
 
 	return strings.Join(result, "\n")
