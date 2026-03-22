@@ -1,10 +1,11 @@
 package components
 
 import (
-	"github.com/julioguillermo/jgsh/internal/sh/logic"
+	"strings"
+	"time"
+
 	"github.com/julioguillermo/jgsh/internal/syntax/ports"
 	"github.com/julioguillermo/jgsh/internal/ui/styles"
-	"time"
 )
 
 // BlockCard handles the rendering of a single command/output block.
@@ -25,10 +26,7 @@ func (b *BlockCard) Render(title string, cmd string, output string, width int, d
 	topBorder := Title(cmdPart, width, duration, isRunning)
 
 	// Ensure content is clean
-	outPart := ""
-	if output != "" {
-		outPart = logic.StripAnsi(output)
-	}
+	outPart := strings.ReplaceAll(output, "\r", "")
 
 	body := styles.BaseBlockStyle.
 		BorderTop(false).

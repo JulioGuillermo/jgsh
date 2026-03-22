@@ -12,6 +12,7 @@ import (
 	"github.com/julioguillermo/jgsh/internal/ui/components"
 	"github.com/julioguillermo/jgsh/internal/ui/domain"
 
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -40,13 +41,20 @@ type BubbleTeaApp struct {
 	highlighter  syntaxports.Highlighter
 	blocks       []domain.Block
 	currentBlock *domain.Block
+	history      *logic.HistoryManager
+	historyCmds  []string
+	historyIndex int
+	draftCommand string
 	ready        bool
 	width        int
 	height       int
 }
 
 // NewBubbleTeaApp creates a new BubbleTeaApp instance.
-func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.InputField, highlighter syntaxports.Highlighter) *BubbleTeaApp {
+func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.InputField, highlighter syntaxports.Highlighter, history *logic.HistoryManager) *BubbleTeaApp {
+	// Load history only for navigation
+	histCmds, _ := history.Load()
+
 	return &BubbleTeaApp{
 		shellManager: shellManager,
 		inputField:   inputField,
@@ -56,8 +64,11 @@ func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.Inp
 		viewport:     viewport.New(0, 0),
 		highlighter:  highlighter,
 		blocks:       make([]domain.Block, 0),
+		history:      history,
+		historyCmds:  histCmds,
+		historyIndex: -1,
 		currentBlock: &domain.Block{
-			Command: "Initializing...",
+			Command: "",
 			Output:  "",
 		},
 	}
@@ -110,6 +121,24 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		headerHeight := lipgloss.Height(m.header.Render())
 		inputFieldY := headerHeight + m.viewport.Height + 3
 
+		// Right click to copy block
+		if msg.Type == tea.MouseRight {
+			headerHeight := 3
+			// Check if click is within viewport bounds
+			if msg.Y >= headerHeight && msg.Y < headerHeight+m.viewport.Height {
+				viewportY := msg.Y - headerHeight + m.viewport.YOffset
+				block := m.findBlockByY(viewportY)
+				if block != nil && block.Command != "" {
+					content := fmt.Sprintf("$ %s\n%s", block.Command, block.Output)
+					// Remove trailing newlines and carriage returns
+					content = strings.TrimRight(content, "\n\r ")
+					clipboard.WriteAll(content)
+					// Visual feedback in status bar
+					m.statusBar.Time = "📋 COPIED: " + block.Command
+				}
+			}
+		}
+
 		// Only translate and pass mouse clicks to the input field, not scroll events
 		isClick := msg.Type == tea.MouseLeft || msg.Type == tea.MouseRelease
 		if isClick && msg.Y >= inputFieldY-1 && msg.Y <= inputFieldY+1 {
@@ -126,12 +155,46 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "ctrl+shift+c":
+			// If we had selection support, we'd copy it here.
+			// For now, let's copy the current input if it's not empty.
+			val := m.inputField.Value()
+			if val != "" {
+				clipboard.WriteAll(val)
+			}
+			return m, nil
 		case "ctrl+c":
 			// If a command is running, send SIGINT, otherwise clear input
 			if m.currentBlock != nil && m.currentBlock.IsRunning {
 				m.shellManager.Write([]byte("\x03"))
 			} else {
 				m.inputField.Reset()
+				m.historyIndex = -1
+				m.draftCommand = ""
+			}
+			return m, nil
+		case "up":
+			if len(m.historyCmds) > 0 && (m.currentBlock == nil || !m.currentBlock.IsRunning) {
+				if m.historyIndex == -1 {
+					m.draftCommand = m.inputField.Value()
+					m.historyIndex = len(m.historyCmds) - 1
+				} else if m.historyIndex > 0 {
+					m.historyIndex--
+				}
+				m.inputField.SetValue(m.historyCmds[m.historyIndex])
+			}
+			return m, nil
+		case "down":
+			if m.currentBlock == nil || !m.currentBlock.IsRunning {
+				if m.historyIndex != -1 {
+					if m.historyIndex < len(m.historyCmds)-1 {
+						m.historyIndex++
+						m.inputField.SetValue(m.historyCmds[m.historyIndex])
+					} else {
+						m.historyIndex = -1
+						m.inputField.SetValue(m.draftCommand)
+					}
+				}
 			}
 			return m, nil
 		case "enter":
@@ -139,6 +202,14 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if val == "" || (m.currentBlock != nil && m.currentBlock.IsRunning) {
 				return m, nil
 			}
+
+			// Reset history index
+			m.historyIndex = -1
+			m.draftCommand = ""
+
+			// Save to persistent history and local navigation buffer
+			m.history.Append(val)
+			m.historyCmds = append(m.historyCmds, val)
 
 			// Special command: exit
 			if val == "exit" {
@@ -168,7 +239,9 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentBlock.Output = logic.StripEcho(m.currentBlock.Output, m.currentBlock.Command)
 			m.currentBlock.Output = logic.StripPrompt(m.currentBlock.Output)
 
-			m.blocks = append(m.blocks, *m.currentBlock)
+			if m.currentBlock.Command != "" {
+				m.blocks = append(m.blocks, *m.currentBlock)
+			}
 
 			// Start new fresh block
 			m.currentBlock = &domain.Block{
@@ -192,18 +265,44 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// findBlockByY returns the block at the given viewport-relative Y coordinate.
+func (m *BubbleTeaApp) findBlockByY(y int) *domain.Block {
+	if m.viewport.Width <= 0 {
+		return nil
+	}
+	currentY := 0
+	for i, block := range m.blocks {
+		h := lipgloss.Height(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, block.Output, m.viewport.Width-3, block.Duration, false))
+		if y >= currentY && y < currentY+h {
+			return &m.blocks[i]
+		}
+		currentY += h + 1 // +1 for the newline between cards
+	}
+
+	// Check current block
+	if m.currentBlock != nil && (m.currentBlock.Command != "" || m.currentBlock.Output != "") {
+		out := m.currentBlock.Output
+		h := lipgloss.Height(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), true))
+		if y >= currentY && y < currentY+h {
+			return m.currentBlock
+		}
+	}
+
+	return nil
+}
+
 // renderAllBlocks renders all blocks into a single string for the viewport.
 func (m *BubbleTeaApp) renderAllBlocks() string {
 	var b strings.Builder
 	for i, block := range m.blocks {
-		b.WriteString(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, block.Output, m.width-3, block.Duration, false))
+		b.WriteString(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, block.Output, m.viewport.Width-3, block.Duration, false))
 		b.WriteString("\n")
 	}
 
-	if m.currentBlock != nil && (m.currentBlock.Command != "" || m.currentBlock.Output != "") {
+	if m.currentBlock != nil && m.currentBlock.Command != "" {
 		out := logic.StripEcho(m.currentBlock.Output, m.currentBlock.Command)
 		out = logic.StripPrompt(out)
-		b.WriteString(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.width-3, time.Since(m.currentBlock.StartTime), true))
+		b.WriteString(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), true))
 	}
 	return b.String()
 }

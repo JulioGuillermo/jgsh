@@ -167,6 +167,12 @@ func (i *InputField) Value() string {
 	return i.textInput.Value()
 }
 
+// SetValue updates the current text in the input field.
+func (i *InputField) SetValue(s string) {
+	i.textInput.SetValue(s)
+	i.textInput.SetCursor(len(s))
+}
+
 // Reset clears the input field.
 func (i *InputField) Reset() {
 	i.textInput.Reset()
