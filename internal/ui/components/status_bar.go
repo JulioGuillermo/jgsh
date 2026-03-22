@@ -9,13 +9,15 @@ import (
 
 // StatusBar renders the bottom info bar.
 type StatusBar struct {
-	BlocksCount int
-	Width       int
-	CWD         string
-	Git         logic.GitStatus
-	Project     string
-	Venv        string
-	Time        string
+	BlocksCount     int
+	Width           int
+	CWD             string
+	Git             logic.GitStatus
+	Project         string
+	Venv            string
+	Time            string
+	Completions     []string
+	CompletionIndex int
 }
 
 // getLangIcon returns a nerd font icon for common languages.

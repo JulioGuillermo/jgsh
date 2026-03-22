@@ -3,6 +3,8 @@ package adapters
 import (
 	"fmt"
 	"io"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -32,23 +34,27 @@ func tick() tea.Cmd {
 
 // BubbleTeaApp implements the TUI using Bubble Tea.
 type BubbleTeaApp struct {
-	shellManager  ports.ShellManager
-	inputField    *components.InputField
-	blockCard     *components.BlockCard
-	historySearch *components.HistorySearch
-	header        *components.Header
-	statusBar     *components.StatusBar
-	viewport      viewport.Model
-	highlighter   syntaxports.Highlighter
-	blocks        []domain.Block
-	currentBlock  *domain.Block
-	history       *logic.HistoryManager
-	historyCmds   []string
-	historyIndex  int
-	draftCommand  string
-	ready         bool
-	width         int
-	height        int
+	shellManager       ports.ShellManager
+	inputField         *components.InputField
+	blockCard          *components.BlockCard
+	historySearch      *components.HistorySearch
+	completionSelector *components.CompletionSelector
+	header             *components.Header
+	statusBar          *components.StatusBar
+	viewport           viewport.Model
+	highlighter        syntaxports.Highlighter
+	blocks             []domain.Block
+	currentBlock       *domain.Block
+	history            *logic.HistoryManager
+	config             *logic.ConfigManager
+	completionEngine   *logic.CompletionEngine
+	historyCmds        []string
+	customFullScreen   []string
+	historyIndex       int
+	draftCommand       string
+	ready              bool
+	width              int
+	height             int
 }
 
 // NewBubbleTeaApp creates a new BubbleTeaApp instance.
@@ -56,19 +62,26 @@ func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.Inp
 	// Load history only for navigation
 	histCmds, _ := history.Load()
 
+	config := logic.NewConfigManager()
+	customFS := config.LoadFullscreenCommands()
+
 	return &BubbleTeaApp{
-		shellManager:  shellManager,
-		inputField:    inputField,
-		blockCard:     components.NewBlockCard(highlighter),
-		historySearch: components.NewHistorySearch(),
-		header:        &components.Header{Title: "🚀 PROJECT GLOCK"},
-		statusBar:     &components.StatusBar{},
-		viewport:      viewport.New(0, 0),
-		highlighter:   highlighter,
-		blocks:        make([]domain.Block, 0),
-		history:       history,
-		historyCmds:   histCmds,
-		historyIndex:  -1,
+		shellManager:       shellManager,
+		inputField:         inputField,
+		blockCard:          components.NewBlockCard(highlighter),
+		historySearch:      components.NewHistorySearch(),
+		completionSelector: components.NewCompletionSelector(),
+		header:             &components.Header{Title: "🚀 PROJECT GLOCK"},
+		statusBar:          &components.StatusBar{},
+		viewport:           viewport.New(0, 0),
+		highlighter:        highlighter,
+		blocks:             make([]domain.Block, 0),
+		history:            history,
+		config:             config,
+		completionEngine:   logic.NewCompletionEngine(),
+		historyCmds:        histCmds,
+		customFullScreen:   customFS,
+		historyIndex:       -1,
 		currentBlock: &domain.Block{
 			Command: "",
 			Output:  "",
@@ -174,7 +187,79 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// If a command is running, transfer ALL control to the PTY (Raw Passthrough)
+		if m.currentBlock != nil && m.currentBlock.IsRunning {
+			keyStr := msg.String()
+
+			// Always allow Ctrl+C to send SIGINT
+			if keyStr == "ctrl+c" {
+				m.shellManager.Write([]byte("\x03"))
+				return m, nil
+			}
+
+			// Handle special keys mapping to ANSI/ASCII
+			switch keyStr {
+			case "enter":
+				m.shellManager.Write([]byte("\r"))
+			case "backspace":
+				m.shellManager.Write([]byte("\x7f"))
+			case "tab":
+				m.shellManager.Write([]byte("\t"))
+			case "esc":
+				m.shellManager.Write([]byte("\x1b"))
+			case "up":
+				m.shellManager.Write([]byte("\x1b[A"))
+			case "down":
+				m.shellManager.Write([]byte("\x1b[B"))
+			case "right":
+				m.shellManager.Write([]byte("\x1b[C"))
+			case "left":
+				m.shellManager.Write([]byte("\x1b[D"))
+			case "space":
+				m.shellManager.Write([]byte(" "))
+			default:
+				// For normal characters and other Ctrl keys
+				if len(msg.Runes) > 0 {
+					m.shellManager.Write([]byte(string(msg.Runes)))
+				} else if strings.HasPrefix(keyStr, "ctrl+") && len(keyStr) == 6 {
+					// Handle ctrl+a through ctrl+z
+					char := keyStr[5]
+					if char >= 'a' && char <= 'z' {
+						m.shellManager.Write([]byte{char - 'a' + 1})
+					}
+				}
+			}
+			return m, nil
+		}
+
 		switch msg.String() {
+		case "tab":
+			if m.inputField.IsCycling() {
+				m.inputField.NextCompletion()
+				m.completionSelector.SetIndex(m.inputField.CompletionIndex())
+			} else {
+				cwd := logic.GetShellCWD(m.shellManager.GetPID())
+				val := m.inputField.Value()
+				pos := m.inputField.Position()
+				matches, word := m.completionEngine.Complete(val, pos, cwd)
+				if len(matches) > 0 {
+					m.inputField.SetCompletions(matches, word)
+					m.completionSelector.Activate(matches, 0)
+				}
+			}
+			return m, nil
+		case "shift+tab":
+			if m.inputField.IsCycling() {
+				m.inputField.PrevCompletion()
+				m.completionSelector.SetIndex(m.inputField.CompletionIndex())
+			}
+			return m, nil
+		case "esc":
+			if m.completionSelector.IsActive() {
+				m.completionSelector.Deactivate()
+				m.inputField.ResetCompletion()
+				return m, nil
+			}
 		case "ctrl+r":
 			m.historySearch.Activate(m.historyCmds, m.inputField.Value())
 			return m, nil
@@ -186,6 +271,7 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.inputField.Reset()
 				m.historyIndex = -1
 				m.draftCommand = ""
+				m.completionSelector.Deactivate()
 			}
 			return m, nil
 		case "up":
@@ -213,8 +299,20 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
+			if m.completionSelector.IsActive() {
+				m.completionSelector.Deactivate()
+				m.inputField.ResetCompletion()
+			}
 			val := m.inputField.Value()
-			if val == "" || (m.currentBlock != nil && m.currentBlock.IsRunning) {
+
+			// If a command is running, send the input to the process (e.g. password or confirmation)
+			if m.currentBlock != nil && m.currentBlock.IsRunning {
+				m.shellManager.Write([]byte(val + "\n"))
+				m.inputField.Reset()
+				return m, nil
+			}
+
+			if val == "" {
 				return m, nil
 			}
 
@@ -231,6 +329,25 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 
+			// Check for full-screen/interactive apps that need native terminal control
+			if m.isFullScreenApp(val) {
+				m.history.Append(val)
+				m.historyCmds = append(m.historyCmds, val)
+				m.inputField.Reset()
+
+				// Get current CWD to run the command in the same place
+				cwd := logic.GetShellCWD(m.shellManager.GetPID())
+
+				cmd := exec.Command("bash", "-c", val)
+				cmd.Dir = cwd
+
+				return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+					// Add block to history when finished
+					// We'll create a synthetic block for the history log
+					return nil
+				})
+			}
+
 			// Send command
 			m.shellManager.Write([]byte(val + "\n"))
 
@@ -244,6 +361,21 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ShellMsg:
 		msgStr := string(msg)
 		m.currentBlock.Output += msgStr
+
+		// Follow output
+		m.viewport.GotoBottom()
+
+		// Dynamic detection of full-screen apps
+		if strings.Contains(msgStr, "\x1b[?1049h") || strings.Contains(msgStr, "\x1b[H\x1b[2J") {
+			m.currentBlock.NeedsNative = true
+		}
+
+		// Detect password prompts to mask input
+		if logic.IsPasswordPrompt(m.currentBlock.Output) {
+			m.inputField.SetPasswordMode(true)
+		} else {
+			m.inputField.SetPasswordMode(false)
+		}
 
 		if logic.DetectPrompt([]byte(m.currentBlock.Output)) {
 			// Finish current block
@@ -269,9 +401,16 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update components
-	_, inputCmd := m.inputField.Update(finalMsg)
-	if inputCmd != nil {
-		cmds = append(cmds, inputCmd)
+	if m.currentBlock == nil || !m.currentBlock.IsRunning {
+		_, inputCmd := m.inputField.Update(finalMsg)
+		if inputCmd != nil {
+			cmds = append(cmds, inputCmd)
+		}
+	}
+
+	// Sync completion selector
+	if !m.inputField.IsCycling() {
+		m.completionSelector.Deactivate()
 	}
 
 	// Update viewport content
@@ -315,9 +454,12 @@ func (m *BubbleTeaApp) renderAllBlocks() string {
 	}
 
 	if m.currentBlock != nil && m.currentBlock.Command != "" {
-		out := logic.StripEcho(m.currentBlock.Output, m.currentBlock.Command)
-		out = logic.StripPrompt(out)
-		b.WriteString(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), true))
+		out := m.currentBlock.Output
+		if !m.currentBlock.IsRunning {
+			out = logic.StripEcho(out, m.currentBlock.Command)
+			out = logic.StripPrompt(out)
+		}
+		b.WriteString(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), m.currentBlock.IsRunning))
 	}
 	return b.String()
 }
@@ -354,6 +496,7 @@ func (m *BubbleTeaApp) View() string {
 
 	m.inputField.SetWidth(m.width)
 	m.historySearch.SetWidth(m.width)
+	m.completionSelector.SetWidth(m.width)
 	m.statusBar.BlocksCount = len(m.blocks)
 	m.statusBar.Width = m.width
 	m.statusBar.CWD = logic.GetShellCWD(m.shellManager.GetPID())
@@ -361,6 +504,8 @@ func (m *BubbleTeaApp) View() string {
 	m.statusBar.Project = logic.GetProjectInfo(m.statusBar.CWD)
 	m.statusBar.Venv = logic.GetVenvInfo()
 	m.statusBar.Time = time.Now().Format("15:04:05")
+	m.statusBar.Completions = m.inputField.Completions()
+	m.statusBar.CompletionIndex = m.inputField.CompletionIndex()
 
 	// Join the viewport and scrollbar horizontally
 	viewArea := lipgloss.JoinHorizontal(
@@ -373,14 +518,26 @@ func (m *BubbleTeaApp) View() string {
 	if m.historySearch.IsActive() {
 		bottomArea = "\n" + m.historySearch.View()
 	} else if m.currentBlock != nil && m.currentBlock.IsRunning {
-		// Replace input with a "Command Running" message of the same height to avoid jumpy UI
+		// Transfer control message
 		runningStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("3")).
+			Foreground(lipgloss.Color("13")). // Magenta
 			Bold(true).
 			Width(m.width).
-			Padding(1, 2).
-			Height(3) // Match input field height (topBorder + newline + body)
-		bottomArea = "\n" + runningStyle.Render("⏳ COMMAND RUNNING... [Ctrl+C to stop]")
+			Padding(0, 1)
+
+		msg := "⚡ RAW CONTROL TRANSFERRED (Type directly...) [Ctrl+C to break]"
+		if m.currentBlock.NeedsNative {
+			msg = "⚠️ FULLSCREEN APP DETECTED - UI may break. [Prefix with ! to run natively next time]"
+		}
+
+		bottomArea = "\n" + runningStyle.Render(msg)
+	} else {
+		m.inputField.SetLabel(" COMMAND ")
+	}
+
+	if m.completionSelector.IsActive() {
+
+		bottomArea += "\n" + m.completionSelector.View()
 	}
 
 	return lipgloss.JoinVertical(
@@ -390,4 +547,68 @@ func (m *BubbleTeaApp) View() string {
 		bottomArea,
 		"\n"+m.statusBar.Render(),
 	)
+}
+
+// isFullScreenApp checks if a command is likely a full-screen TUI.
+func (m *BubbleTeaApp) isFullScreenApp(cmd string) bool {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return false
+	}
+
+	// Handle explicit native execution with ! prefix
+	if strings.HasPrefix(cmd, "!") {
+		return true
+	}
+
+	parts := strings.Fields(cmd)
+	if len(parts) == 0 {
+		return false
+	}
+	binaryName := parts[0]
+
+	// 1. Check user custom list from ~/.jgsh_fullscreen
+	for _, app := range m.customFullScreen {
+		if binaryName == app {
+			return true
+		}
+	}
+
+	// Find the actual path of the binary
+	path, err := exec.LookPath(binaryName)
+	if err == nil {
+		// Use deep library inspection for 99% accuracy
+		if logic.IsTUIBinary(path) {
+			return true
+		}
+	}
+
+	binary := filepath.Base(binaryName)
+
+	// 2. Exact matches for popular apps (mostly for aliases or scripts not easily checked via ldd)
+	fullScreenApps := []string{
+
+		"nvim", "vim", "vi", "nano", "emacs", "kak", "helix", "hx",
+		"htop", "top", "btop", "nmon", "glances", "gtop",
+		"tmux", "screen", "less", "more", "man", "pager",
+		"fzf", "vifm", "ranger", "mc", "ncdu", "dua",
+		"ssh", "mosh", "irssi", "weechat", "mutt", "neomutt",
+		"tig", "lazygit", "lazydocker", "gh", "ipython", "bpython",
+	}
+
+	for _, app := range fullScreenApps {
+		if binary == app {
+			return true
+		}
+	}
+
+	// 2. Suffix-based heuristics
+	suffixes := []string{"view", "edit", "top", "mon", "tui", "gui"}
+	for _, s := range suffixes {
+		if strings.HasSuffix(binary, s) && binary != "mon" && binary != "top" {
+			return true
+		}
+	}
+
+	return false
 }

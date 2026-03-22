@@ -121,6 +121,31 @@ func GetVenvInfo() string {
 	return ""
 }
 
+// IsTUIBinary checks if a binary is likely a TUI application by inspecting its linked libraries.
+func IsTUIBinary(path string) bool {
+	if path == "" {
+		return false
+	}
+
+	// Use ldd to check for ncurses, tinfo, or slang dependencies
+	// This is very reliable for detecting TUI apps on Linux.
+	cmd := exec.Command("ldd", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	s := strings.ToLower(string(out))
+	tuiLibs := []string{"ncurses", "tinfo", "slang", "readline", "libncurses", "libtinfo"}
+	for _, lib := range tuiLibs {
+		if strings.Contains(s, lib) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // GetProjectInfo detects the project type based on files in the directory.
 func GetProjectInfo(cwd string) string {
 	// Common project indicators

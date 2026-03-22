@@ -24,6 +24,23 @@ func StripAnsi(str string) string {
 	return result
 }
 
+// IsPasswordPrompt checks if the given output contains a password prompt.
+func IsPasswordPrompt(output string) bool {
+	lower := strings.ToLower(StripAnsi(output))
+	patterns := []string{
+		"password:",
+		"password for ",
+		"passphrase:",
+		"[sudo] password",
+	}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // DetectPrompt checks if the given buffer ends with a shell prompt.
 func DetectPrompt(buffer []byte) bool {
 	// 1. Check for our special GLOCK prompt first
