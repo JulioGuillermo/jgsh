@@ -290,6 +290,11 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "up":
+			if m.completionSelector.IsActive() {
+				m.inputField.PrevCompletion()
+				m.completionSelector.SetIndex(m.inputField.CompletionIndex())
+				return m, nil
+			}
 			if len(m.historyCmds) > 0 && (m.currentBlock == nil || !m.currentBlock.IsRunning) {
 				if m.historyIndex == -1 {
 					m.draftCommand = m.inputField.Value()
@@ -301,6 +306,11 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "down":
+			if m.completionSelector.IsActive() {
+				m.inputField.NextCompletion()
+				m.completionSelector.SetIndex(m.inputField.CompletionIndex())
+				return m, nil
+			}
 			if m.currentBlock == nil || !m.currentBlock.IsRunning {
 				if m.historyIndex != -1 {
 					if m.historyIndex < len(m.historyCmds)-1 {
@@ -320,6 +330,7 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.completionSelector.IsActive() {
 				m.completionSelector.Deactivate()
 				m.inputField.ResetCompletion()
+				return m, nil
 			}
 			val := m.inputField.Value()
 
@@ -445,7 +456,7 @@ func (m *BubbleTeaApp) findBlockByY(y int) *domain.Block {
 	}
 	currentY := 0
 	for i, block := range m.blocks {
-		h := lipgloss.Height(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, block.Output, m.viewport.Width-3, block.Duration, false))
+		h := lipgloss.Height(m.blockCard.Render(block.Command, block.Output, m.viewport.Width-3, block.Duration, false))
 		if y >= currentY && y < currentY+h {
 			return &m.blocks[i]
 		}
@@ -455,7 +466,7 @@ func (m *BubbleTeaApp) findBlockByY(y int) *domain.Block {
 	// Check current block
 	if m.currentBlock != nil && (m.currentBlock.Command != "" || m.currentBlock.Output != "") {
 		out := m.currentBlock.Output
-		h := lipgloss.Height(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), true))
+		h := lipgloss.Height(m.blockCard.Render(m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), true))
 		if y >= currentY && y < currentY+h {
 			return m.currentBlock
 		}
@@ -467,9 +478,9 @@ func (m *BubbleTeaApp) findBlockByY(y int) *domain.Block {
 // renderAllBlocks renders all blocks into a single string for the viewport.
 func (m *BubbleTeaApp) renderAllBlocks() string {
 	var b strings.Builder
-	for i, block := range m.blocks {
+	for _, block := range m.blocks {
 		out := logic.FoldCarriageReturns(block.Output)
-		b.WriteString(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, out, m.viewport.Width-3, block.Duration, false))
+		b.WriteString(m.blockCard.Render(block.Command, out, m.viewport.Width-3, block.Duration, false))
 		b.WriteString("\n")
 	}
 
@@ -479,7 +490,7 @@ func (m *BubbleTeaApp) renderAllBlocks() string {
 			out = logic.StripEcho(out, m.currentBlock.Command)
 			out = logic.StripPrompt(out)
 		}
-		b.WriteString(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), m.currentBlock.IsRunning))
+		b.WriteString(m.blockCard.Render(m.currentBlock.Command, out, m.viewport.Width-3, time.Since(m.currentBlock.StartTime), m.currentBlock.IsRunning))
 	}
 	return b.String()
 }

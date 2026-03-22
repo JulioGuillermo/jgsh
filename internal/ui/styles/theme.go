@@ -29,7 +29,6 @@ var (
 	InputPromptStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("15")).
-				Background(lipgloss.Color("62")).
 				Padding(0, 1)
 
 	InputBoxStyle = lipgloss.NewStyle().

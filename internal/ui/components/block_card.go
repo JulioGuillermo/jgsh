@@ -23,15 +23,15 @@ func NewBlockCard(highlighter ports.Highlighter) *BlockCard {
 }
 
 // Render returns the string representation of a block card.
-func (b *BlockCard) Render(title string, cmd string, output string, width int, duration time.Duration, isRunning bool) string {
+func (b *BlockCard) Render(cmd string, output string, width int, duration time.Duration, isRunning bool) string {
 	cmdPart := b.Highlighter.Highlight(cmd)
-	topBorder := Title(title, cmdPart, width, duration, isRunning)
+	topBorder, show := Title(cmdPart, width, duration, isRunning)
 
 	// Build the content: full command + output
 	var content strings.Builder
 
 	// If the command is multi-line, we show it clearly at the top
-	if strings.Contains(cmd, "\n") {
+	if show {
 		// Highlighted multi-line command
 		content.WriteString(cmdPart)
 		content.WriteString("\n")
