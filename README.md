@@ -1,6 +1,6 @@
 # 🚀 JGSH: The Modern Block Terminal
 
-JGSH (project name Glock) is a modern TUI-based terminal wrapper written in Go. It intercepts shell sessions to organize command output into interactive, isolated "Blocks," providing IDE-grade syntax highlighting and a refined multi-line input experience.
+JGSH is a modern TUI-based terminal wrapper written in Go. It intercepts shell sessions to organize command output into interactive, isolated "Blocks," providing IDE-grade syntax highlighting and a refined multi-line input experience.
 
 ## ✨ Key Features
 
@@ -31,7 +31,7 @@ git clone https://github.com/julioguillermo/jgsh.git
 cd jgsh
 
 # Build the binary
-go build -o jgsh cmd/glock/main.go
+go build -o jgsh cmd/jgsh/main.go
 
 # Run JGSH
 ./jgsh

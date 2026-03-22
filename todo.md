@@ -1,4 +1,4 @@
-# 🚀 PROJECT GLOCK: THE MODULAR BLOCK TERMINAL
+# 🚀 PROJECT JGSH: THE MODULAR BLOCK TERMINAL
 
 ## 🛠️ PROGRESS TRACKER
 
@@ -9,7 +9,7 @@
 - [x] **ANSI Parser Logic:** `internal/sh/logic/prompt_detector.go` [COMPLETED]
 - [x] **TUI Initialization:** `internal/ui/adapters/bubble_tea_app.go` [COMPLETED]
 - [x] **Block Entity:** `internal/ui/domain/block.go` [COMPLETED]
-- [x] **Main Entry Point:** `cmd/glock/main.go` [COMPLETED]
+- [x] **Main Entry Point:** `cmd/jgsh/main.go` [COMPLETED]
 - [x] **Advanced Output Processing:** Handling `\r`, `\b` and clear sequences in `FoldCarriageReturns`. [COMPLETED]
 
 ### 🟡 PHASE 2: Interactive Smart Input

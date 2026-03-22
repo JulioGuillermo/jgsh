@@ -1,4 +1,4 @@
-# 🚀 PROJECT GLOCK: THE MODULAR BLOCK TERMINAL
+# 🚀 PROJECT JGSH: THE MODULAR BLOCK TERMINAL
 
 **Vision:** A TUI-based Terminal Wrapper written in Go that intercepts shell sessions to organize output into interactive "Blocks," providing IDE-grade syntax highlighting and contextual autocompletion.
 
@@ -25,7 +25,7 @@ Each module must have:
 
 ```text
 .
-├── cmd/glock/main.go           # Entry point
+├── cmd/jgsh/main.go           # Entry point
 ├── internal/
 │   ├── sh/                     # Shell & PTY Management
 │   ├── ui/                     # Bubble Tea TUI & Components
