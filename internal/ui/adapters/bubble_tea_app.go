@@ -158,31 +158,38 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.ready {
 			break
 		}
-		// Translate mouse clicks for the input field
+		// Calculate precise layout positions
 		headerHeight := lipgloss.Height(m.header.Render())
-		inputFieldY := headerHeight + m.viewport.Height + 3
+		viewportStartY := headerHeight
+		viewportEndY := headerHeight + m.viewport.Height
+		inputFieldY := viewportEndY + 1 // Input starts after viewport
 
 		// Right click to copy block
 		if msg.Type == tea.MouseRight {
-			headerHeight := 3
 			// Check if click is within viewport bounds
-			if msg.Y >= headerHeight && msg.Y < headerHeight+m.viewport.Height {
-				viewportY := msg.Y - headerHeight + m.viewport.YOffset
+			if msg.Y >= viewportStartY && msg.Y < viewportEndY {
+				// Translate screen Y to viewport-content relative Y
+				viewportY := msg.Y - viewportStartY + m.viewport.YOffset
 				block := m.findBlockByY(viewportY)
 				if block != nil && block.Command != "" {
-					content := fmt.Sprintf("$ %s\n%s", block.Command, block.Output)
-					// Remove trailing newlines and carriage returns
+					out := logic.FoldCarriageReturns(block.Output)
+					content := fmt.Sprintf("$ %s\n%s", block.Command, out)
 					content = strings.TrimRight(content, "\n\r ")
-					clipboard.WriteAll(content)
-					// Visual feedback in status bar
-					m.statusBar.Time = "📋 COPIED: " + block.Command
+
+					err := clipboard.WriteAll(content)
+					if err == nil {
+						// Visual feedback in status bar
+						m.statusBar.Notification = "📋 COPIED: " + block.Command
+					} else {
+						m.statusBar.Notification = "❌ COPY FAILED"
+					}
 				}
 			}
 		}
 
 		// Only translate and pass mouse clicks to the input field, not scroll events
 		isClick := msg.Type == tea.MouseLeft || msg.Type == tea.MouseRelease
-		if isClick && msg.Y >= inputFieldY-1 && msg.Y <= inputFieldY+1 {
+		if isClick && msg.Y >= inputFieldY {
 			msg.X -= 2
 			msg.Y = 0
 			finalMsg = msg
