@@ -1,0 +1,239 @@
+package adapters
+
+import (
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/julioguillermo/jgsh/internal/sh/logic"
+	"github.com/julioguillermo/jgsh/internal/sh/ports"
+	syntaxports "github.com/julioguillermo/jgsh/internal/syntax/ports"
+	"github.com/julioguillermo/jgsh/internal/ui/components"
+	"github.com/julioguillermo/jgsh/internal/ui/domain"
+
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+// ShellMsg represents a chunk of data read from the shell.
+type ShellMsg string
+
+// BubbleTeaApp implements the TUI using Bubble Tea.
+type BubbleTeaApp struct {
+	shellManager ports.ShellManager
+	inputField   *components.InputField
+	blockCard    *components.BlockCard
+	header       *components.Header
+	statusBar    *components.StatusBar
+	viewport     viewport.Model
+	highlighter  syntaxports.Highlighter
+	blocks       []domain.Block
+	currentBlock *domain.Block
+	ready        bool
+	width        int
+	height       int
+}
+
+// NewBubbleTeaApp creates a new BubbleTeaApp instance.
+func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.InputField, highlighter syntaxports.Highlighter) *BubbleTeaApp {
+	return &BubbleTeaApp{
+		shellManager: shellManager,
+		inputField:   inputField,
+		blockCard:    components.NewBlockCard(highlighter),
+		header:       &components.Header{Title: "🚀 PROJECT GLOCK"},
+		statusBar:    &components.StatusBar{},
+		viewport:     viewport.New(0, 0),
+		highlighter:  highlighter,
+		blocks:       make([]domain.Block, 0),
+		currentBlock: &domain.Block{
+			Command: "Initializing...",
+			Output:  "",
+		},
+	}
+}
+
+// listenToShell is a tea.Cmd that reads from the shell and sends ShellMsg.
+func listenToShell(reader io.Reader) tea.Cmd {
+	return func() tea.Msg {
+		buf := make([]byte, 4096)
+		n, err := reader.Read(buf)
+		if err != nil {
+			return nil
+		}
+		return ShellMsg(string(buf[:n]))
+	}
+}
+
+// Init initializes the Bubble Tea application.
+func (m *BubbleTeaApp) Init() tea.Cmd {
+	return tea.Batch(
+		listenToShell(m.shellManager.GetReader()),
+		m.inputField.Init(),
+	)
+}
+
+// Update handles messages and updates the application state.
+func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+
+		// Header + Input(3) + Status(1) + Spacing(3)
+		m.viewport.Width = m.width
+		m.viewport.Height = m.height - 10
+		m.ready = true
+
+	case tea.MouseMsg:
+		if !m.ready {
+			break
+		}
+		// Translate mouse clicks for the input field
+		// Header(3) + Viewport(m.height-10) + \n(1) + topBorder(1) + \n(1)
+		headerHeight := lipgloss.Height(m.header.Render())
+		inputFieldY := headerHeight + m.viewport.Height + 3
+
+		if msg.Y == inputFieldY {
+			// Translate coordinates: -2 for left border/padding
+			msg.X -= 2
+			msg.Y = 0 // textinput expects relative Y=0
+			_, cmd := m.inputField.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "enter":
+			val := m.inputField.Value()
+			if val == "" {
+				return m, nil
+			}
+
+			// Send command
+			m.shellManager.Write([]byte(val + "\n"))
+
+			// Setup current block
+			m.currentBlock.Command = val
+			m.currentBlock.StartTime = time.Now()
+			m.currentBlock.IsRunning = true
+
+			m.inputField.Reset()
+		}
+	case ShellMsg:
+		msgStr := string(msg)
+		m.currentBlock.Output += msgStr
+
+		if logic.DetectPrompt([]byte(m.currentBlock.Output)) {
+			// Finish current block
+			m.currentBlock.Duration = time.Since(m.currentBlock.StartTime)
+			m.currentBlock.Finished = true
+			m.currentBlock.IsRunning = false
+
+			m.currentBlock.Output = logic.StripEcho(m.currentBlock.Output, m.currentBlock.Command)
+			m.currentBlock.Output = logic.StripPrompt(m.currentBlock.Output)
+
+			m.blocks = append(m.blocks, *m.currentBlock)
+
+			// Start new fresh block
+			m.currentBlock = &domain.Block{
+				Command: "",
+				Output:  "",
+			}
+			m.viewport.GotoBottom()
+		}
+		cmds = append(cmds, listenToShell(m.shellManager.GetReader()))
+	}
+
+	// Update components
+	_, inputCmd := m.inputField.Update(msg)
+	if inputCmd != nil {
+		cmds = append(cmds, inputCmd)
+	}
+
+	// Update viewport content
+	m.viewport.SetContent(m.renderAllBlocks())
+
+	var vpCmd tea.Cmd
+	m.viewport, vpCmd = m.viewport.Update(msg)
+	if vpCmd != nil {
+		cmds = append(cmds, vpCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+// renderAllBlocks renders all blocks into a single string for the viewport.
+func (m *BubbleTeaApp) renderAllBlocks() string {
+	var b strings.Builder
+	for i, block := range m.blocks {
+		b.WriteString(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, block.Output, m.width-3, block.Duration, false))
+		b.WriteString("\n")
+	}
+
+	if m.currentBlock != nil && (m.currentBlock.Command != "" || m.currentBlock.Output != "") {
+		out := logic.StripEcho(m.currentBlock.Output, m.currentBlock.Command)
+		out = logic.StripPrompt(out)
+		b.WriteString(m.blockCard.Render("EXEC", m.currentBlock.Command, out, m.width-3, time.Since(m.currentBlock.StartTime), true))
+	}
+	return b.String()
+}
+
+// renderScrollBar creates a vertical scroll indicator.
+func (m *BubbleTeaApp) renderScrollBar() string {
+	height := m.viewport.Height
+	if height <= 0 {
+		return ""
+	}
+
+	scrollPct := m.viewport.ScrollPercent()
+	barPos := int(float64(height-1) * scrollPct)
+
+	var s strings.Builder
+	for i := 0; i < height; i++ {
+		if i == barPos {
+			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("12")).Render("┃"))
+		} else {
+			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("238")).Render("│"))
+		}
+		if i < height-1 {
+			s.WriteString("\n")
+		}
+	}
+	return s.String()
+}
+
+// View renders the application UI.
+func (m *BubbleTeaApp) View() string {
+	if !m.ready {
+		return "Initializing UI..."
+	}
+
+	m.inputField.SetWidth(m.width)
+	m.statusBar.BlocksCount = len(m.blocks)
+	m.statusBar.Width = m.width
+	m.statusBar.CWD = logic.GetShellCWD(m.shellManager.GetPID())
+	m.statusBar.GitBranch = logic.GetGitInfo(m.statusBar.CWD)
+
+	// Join the viewport and scrollbar horizontally
+	viewArea := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		m.viewport.View(),
+		m.renderScrollBar(),
+	)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.header.Render(),
+		viewArea,
+		"\n"+m.inputField.View(),
+		"\n"+m.statusBar.Render(),
+	)
+}
