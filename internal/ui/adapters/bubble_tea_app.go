@@ -32,22 +32,23 @@ func tick() tea.Cmd {
 
 // BubbleTeaApp implements the TUI using Bubble Tea.
 type BubbleTeaApp struct {
-	shellManager ports.ShellManager
-	inputField   *components.InputField
-	blockCard    *components.BlockCard
-	header       *components.Header
-	statusBar    *components.StatusBar
-	viewport     viewport.Model
-	highlighter  syntaxports.Highlighter
-	blocks       []domain.Block
-	currentBlock *domain.Block
-	history      *logic.HistoryManager
-	historyCmds  []string
-	historyIndex int
-	draftCommand string
-	ready        bool
-	width        int
-	height       int
+	shellManager  ports.ShellManager
+	inputField    *components.InputField
+	blockCard     *components.BlockCard
+	historySearch *components.HistorySearch
+	header        *components.Header
+	statusBar     *components.StatusBar
+	viewport      viewport.Model
+	highlighter   syntaxports.Highlighter
+	blocks        []domain.Block
+	currentBlock  *domain.Block
+	history       *logic.HistoryManager
+	historyCmds   []string
+	historyIndex  int
+	draftCommand  string
+	ready         bool
+	width         int
+	height        int
 }
 
 // NewBubbleTeaApp creates a new BubbleTeaApp instance.
@@ -56,17 +57,18 @@ func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.Inp
 	histCmds, _ := history.Load()
 
 	return &BubbleTeaApp{
-		shellManager: shellManager,
-		inputField:   inputField,
-		blockCard:    components.NewBlockCard(highlighter),
-		header:       &components.Header{Title: "🚀 PROJECT GLOCK"},
-		statusBar:    &components.StatusBar{},
-		viewport:     viewport.New(0, 0),
-		highlighter:  highlighter,
-		blocks:       make([]domain.Block, 0),
-		history:      history,
-		historyCmds:  histCmds,
-		historyIndex: -1,
+		shellManager:  shellManager,
+		inputField:    inputField,
+		blockCard:     components.NewBlockCard(highlighter),
+		historySearch: components.NewHistorySearch(),
+		header:        &components.Header{Title: "🚀 PROJECT GLOCK"},
+		statusBar:     &components.StatusBar{},
+		viewport:      viewport.New(0, 0),
+		highlighter:   highlighter,
+		blocks:        make([]domain.Block, 0),
+		history:       history,
+		historyCmds:   histCmds,
+		historyIndex:  -1,
 		currentBlock: &domain.Block{
 			Command: "",
 			Output:  "",
@@ -99,6 +101,24 @@ func (m *BubbleTeaApp) Init() tea.Cmd {
 func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	finalMsg := msg
+
+	// Handle history search if active
+	if m.historySearch.IsActive() {
+		selected, closed, searchCmd := m.historySearch.Update(msg)
+		if searchCmd != nil {
+			cmds = append(cmds, searchCmd)
+		}
+		if closed {
+			if selected != "" {
+				m.inputField.SetValue(selected)
+			}
+		}
+		// If search is active, we mostly don't want other components to handle keys
+		// unless it's a window size change
+		if _, ok := msg.(tea.WindowSizeMsg); !ok {
+			return m, tea.Batch(cmds...)
+		}
+	}
 
 	switch msg := msg.(type) {
 	case TickMsg:
@@ -155,13 +175,8 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+shift+c":
-			// If we had selection support, we'd copy it here.
-			// For now, let's copy the current input if it's not empty.
-			val := m.inputField.Value()
-			if val != "" {
-				clipboard.WriteAll(val)
-			}
+		case "ctrl+r":
+			m.historySearch.Activate(m.historyCmds, m.inputField.Value())
 			return m, nil
 		case "ctrl+c":
 			// If a command is running, send SIGINT, otherwise clear input
@@ -338,6 +353,7 @@ func (m *BubbleTeaApp) View() string {
 	}
 
 	m.inputField.SetWidth(m.width)
+	m.historySearch.SetWidth(m.width)
 	m.statusBar.BlocksCount = len(m.blocks)
 	m.statusBar.Width = m.width
 	m.statusBar.CWD = logic.GetShellCWD(m.shellManager.GetPID())
@@ -354,7 +370,9 @@ func (m *BubbleTeaApp) View() string {
 	)
 
 	bottomArea := "\n" + m.inputField.View()
-	if m.currentBlock != nil && m.currentBlock.IsRunning {
+	if m.historySearch.IsActive() {
+		bottomArea = "\n" + m.historySearch.View()
+	} else if m.currentBlock != nil && m.currentBlock.IsRunning {
 		// Replace input with a "Command Running" message of the same height to avoid jumpy UI
 		runningStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("3")).
