@@ -1,11 +1,13 @@
 package components
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/julioguillermo/jgsh/internal/ui/styles"
 )
 
 // HistorySearch is a component for searching through command history.
@@ -30,7 +32,18 @@ func NewHistorySearch() *HistorySearch {
 
 // Activate enables the search with the given history and optional initial query.
 func (h *HistorySearch) Activate(history []string, query string) {
-	h.history = history
+	// Deduplicate history, keeping last occurrence
+	seen := make(map[string]bool)
+	var unique []string
+	for i := len(history) - 1; i >= 0; i-- {
+		cmd := strings.TrimSpace(history[i])
+		if cmd != "" && !seen[cmd] {
+			unique = append([]string{cmd}, unique...)
+			seen[cmd] = true
+		}
+	}
+
+	h.history = unique
 	h.active = true
 	h.textInput.Focus()
 	h.textInput.SetValue(query)
@@ -100,9 +113,21 @@ func (h *HistorySearch) filter() {
 	if query == "" {
 		h.filtered = h.history
 	} else {
+		words := strings.Fields(query)
 		h.filtered = []string{}
 		for _, cmd := range h.history {
-			if strings.Contains(strings.ToLower(cmd), query) {
+			cmdLower := strings.ToLower(cmd)
+			match := true
+			lastIdx := 0
+			for _, word := range words {
+				idx := strings.Index(cmdLower[lastIdx:], word)
+				if idx == -1 {
+					match = false
+					break
+				}
+				lastIdx += idx + len(word)
+			}
+			if match {
 				h.filtered = append(h.filtered, cmd)
 			}
 		}
@@ -111,6 +136,30 @@ func (h *HistorySearch) filter() {
 	if h.selectedIndex < 0 {
 		h.selectedIndex = 0
 	}
+}
+
+// highlightMatch applies highlighting to matching parts of the string.
+func (h *HistorySearch) highlightMatch(cmd string) string {
+	query := h.textInput.Value()
+	if query == "" {
+		return cmd
+	}
+
+	words := strings.Fields(query)
+	highlightStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Bold(true)
+
+	// Escape words for regex
+	var escapedWords []string
+	for _, w := range words {
+		escapedWords = append(escapedWords, regexp.QuoteMeta(w))
+	}
+
+	// Create a regex that matches any of the words
+	re := regexp.MustCompile("(?i)" + strings.Join(escapedWords, "|"))
+
+	return re.ReplaceAllStringFunc(cmd, func(match string) string {
+		return highlightStyle.Render(match)
+	})
 }
 
 // SetWidth updates the width.
@@ -124,22 +173,27 @@ func (h *HistorySearch) View() string {
 		return ""
 	}
 
+	titleText := styles.InputPromptStyle.Render(" HISTORY SEARCH ")
+	titleWidth := lipgloss.Width(titleText)
+
+	borderCol := lipgloss.Color("62")
+	dashCount := h.width - 3 - titleWidth
+	if dashCount < 0 {
+		dashCount = 0
+	}
+
+	topBorder := lipgloss.NewStyle().Foreground(borderCol).Render("╭─") +
+		titleText +
+		lipgloss.NewStyle().Foreground(borderCol).Render(strings.Repeat("─", dashCount)+"╮")
+
 	style := lipgloss.NewStyle().
+		BorderTop(false).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(0, 1, 0, 1). // Reduced bottom padding
 		Width(h.width - 2)
 
 	var b strings.Builder
-	// Header for the search box
-	header := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("62")).
-		Padding(0, 1).
-		Render(" HISTORY SEARCH ")
-
-	b.WriteString(header + "\n")
 	b.WriteString(h.textInput.View() + "\n")
 
 	// Show results
@@ -162,18 +216,19 @@ func (h *HistorySearch) View() string {
 
 		for i := start; i < end; i++ {
 			line := h.filtered[i]
+			highlightedLine := h.highlightMatch(line)
 			if i == h.selectedIndex {
 				b.WriteString(lipgloss.NewStyle().
 					Foreground(lipgloss.Color("62")).
 					Bold(true).
-					Render("> "+line) + "\n")
+					Render("> "+highlightedLine) + "\n")
 			} else {
-				b.WriteString("  " + line + "\n")
+				b.WriteString("  " + highlightedLine + "\n")
 			}
 		}
 	} else {
 		b.WriteString("\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(" No matches found") + "\n")
 	}
 
-	return style.Render(b.String())
+	return topBorder + style.Render(b.String())
 }
