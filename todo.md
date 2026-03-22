@@ -10,21 +10,25 @@
 - [x] **TUI Initialization:** `internal/ui/adapters/bubble_tea_app.go` [COMPLETED]
 - [x] **Block Entity:** `internal/ui/domain/block.go` [COMPLETED]
 - [x] **Main Entry Point:** `cmd/glock/main.go` [COMPLETED]
+- [x] **Advanced Output Processing:** Handling `\r`, `\b` and clear sequences in `FoldCarriageReturns`. [COMPLETED]
 
 ### 🟡 PHASE 2: Interactive Smart Input
 - [x] **Syntax Port:** `internal/syntax/ports/highlighter.go` [COMPLETED]
 - [x] **Tree-sitter Adapter:** `internal/syntax/adapters/ts_bash.go` [COMPLETED]
-- [x] **Input Component:** `internal/ui/components/input_field.go` [COMPLETED]
+- [x] **Input Component:** `internal/ui/components/input_field.go` (Migrated to `textarea`) [COMPLETED]
+- [x] **Multi-line Support:** `Shift+Enter` for inserting newlines in the prompt. [COMPLETED]
 - [x] **Ghost Text Logic:** `internal/ui/logic/prediction_overlay.go` [COMPLETED]
 
 ### 🟠 PHASE 3: Contextual Autocompletion & History
-- [ ] **History Store:** `internal/completion/adapters/sqlite_store.go` [PENDING]
-- [ ] **FS Scanner:** `internal/completion/adapters/fs_provider.go` [PENDING]
-- [ ] **Suggester Engine:** `internal/completion/ports/suggester.go` [PENDING]
-- [ ] **UI Menu:** `internal/ui/components/suggestion_list.go` [PENDING]
+- [x] **History Store:** `internal/sh/logic/history.go` (Persistent history management) [COMPLETED]
+- [x] **FS & Command Scanner:** Integrated in `internal/sh/logic/completion.go`. [COMPLETED]
+- [x] **Suggester Engine:** `internal/sh/logic/completion.go`. [COMPLETED]
+- [x] **UI Menu:** `internal/ui/components/completion_selector.go`. [COMPLETED]
+- [x] **History Search:** `internal/ui/components/history_search.go` (`Ctrl+R`). [COMPLETED]
 
 ### 🔴 PHASE 4: AI & Final Polishing
 - [ ] **AI Port:** `internal/completion/ports/ai_client.go` [PENDING]
 - [ ] **OpenAI/Local Adapter:** `internal/completion/adapters/llm_client.go` [PENDING]
-- [ ] **Clipboard Port:** `internal/ui/ports/clipboard.go` [PENDING]
+- [x] **Clipboard Support:** Integration with `atotto/clipboard` for block copying. [COMPLETED]
 - [ ] **Keybinding Manager:** `internal/ui/logic/hotkeys.go` [PENDING]
+- [x] **UI Polish:** Removed redundant labels, fixed backgrounds, improved multi-line rendering. [COMPLETED]
