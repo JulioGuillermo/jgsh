@@ -83,9 +83,17 @@ func (i *InputField) View() string {
 		if !i.textInput.Focused() {
 			inputContent = highlighted
 		} else {
-			// Get position from the textinput model
-			pos := i.textInput.Position()
-			inputContent = i.renderWithCursor(highlighted, pos)
+			// Check blinking state from the original View
+			tiView := i.textInput.View()
+			// If tiView contains the reverse escape code, the cursor is currently visible
+			showCursor := strings.Contains(tiView, "\x1b[7m") || strings.Contains(tiView, "\x1b[27m")
+
+			if showCursor {
+				pos := i.textInput.Position()
+				inputContent = i.renderWithCursor(highlighted, pos)
+			} else {
+				inputContent = highlighted
+			}
 		}
 	}
 

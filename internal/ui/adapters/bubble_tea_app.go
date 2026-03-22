@@ -20,6 +20,15 @@ import (
 // ShellMsg represents a chunk of data read from the shell.
 type ShellMsg string
 
+// TickMsg is sent every second to update the clock.
+type TickMsg time.Time
+
+func tick() tea.Cmd {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+		return TickMsg(t)
+	})
+}
+
 // BubbleTeaApp implements the TUI using Bubble Tea.
 type BubbleTeaApp struct {
 	shellManager ports.ShellManager
@@ -71,14 +80,19 @@ func (m *BubbleTeaApp) Init() tea.Cmd {
 	return tea.Batch(
 		listenToShell(m.shellManager.GetReader()),
 		m.inputField.Init(),
+		tick(),
 	)
 }
 
 // Update handles messages and updates the application state.
 func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	finalMsg := msg
 
 	switch msg := msg.(type) {
+	case TickMsg:
+		cmds = append(cmds, tick())
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -93,28 +107,42 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			break
 		}
 		// Translate mouse clicks for the input field
-		// Header(3) + Viewport(m.height-10) + \n(1) + topBorder(1) + \n(1)
 		headerHeight := lipgloss.Height(m.header.Render())
 		inputFieldY := headerHeight + m.viewport.Height + 3
 
-		if msg.Y == inputFieldY {
-			// Translate coordinates: -2 for left border/padding
+		// Only translate and pass mouse clicks to the input field, not scroll events
+		isClick := msg.Type == tea.MouseLeft || msg.Type == tea.MouseRelease
+		if isClick && msg.Y >= inputFieldY-1 && msg.Y <= inputFieldY+1 {
 			msg.X -= 2
-			msg.Y = 0 // textinput expects relative Y=0
-			_, cmd := m.inputField.Update(msg)
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+			msg.Y = 0
+			finalMsg = msg
+		}
+		// Pass to viewport for scrolling
+		var vpCmd tea.Cmd
+		m.viewport, vpCmd = m.viewport.Update(msg)
+		if vpCmd != nil {
+			cmds = append(cmds, vpCmd)
 		}
 
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c":
-			return m, tea.Quit
+			// If a command is running, send SIGINT, otherwise clear input
+			if m.currentBlock != nil && m.currentBlock.IsRunning {
+				m.shellManager.Write([]byte("\x03"))
+			} else {
+				m.inputField.Reset()
+			}
+			return m, nil
 		case "enter":
 			val := m.inputField.Value()
-			if val == "" {
+			if val == "" || (m.currentBlock != nil && m.currentBlock.IsRunning) {
 				return m, nil
+			}
+
+			// Special command: exit
+			if val == "exit" {
+				return m, tea.Quit
 			}
 
 			// Send command
@@ -153,19 +181,13 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	// Update components
-	_, inputCmd := m.inputField.Update(msg)
+	_, inputCmd := m.inputField.Update(finalMsg)
 	if inputCmd != nil {
 		cmds = append(cmds, inputCmd)
 	}
 
 	// Update viewport content
 	m.viewport.SetContent(m.renderAllBlocks())
-
-	var vpCmd tea.Cmd
-	m.viewport, vpCmd = m.viewport.Update(msg)
-	if vpCmd != nil {
-		cmds = append(cmds, vpCmd)
-	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -220,7 +242,10 @@ func (m *BubbleTeaApp) View() string {
 	m.statusBar.BlocksCount = len(m.blocks)
 	m.statusBar.Width = m.width
 	m.statusBar.CWD = logic.GetShellCWD(m.shellManager.GetPID())
-	m.statusBar.GitBranch = logic.GetGitInfo(m.statusBar.CWD)
+	m.statusBar.Git = logic.GetGitInfo(m.statusBar.CWD)
+	m.statusBar.Project = logic.GetProjectInfo(m.statusBar.CWD)
+	m.statusBar.Venv = logic.GetVenvInfo()
+	m.statusBar.Time = time.Now().Format("15:04:05")
 
 	// Join the viewport and scrollbar horizontally
 	viewArea := lipgloss.JoinHorizontal(
@@ -229,11 +254,23 @@ func (m *BubbleTeaApp) View() string {
 		m.renderScrollBar(),
 	)
 
+	bottomArea := "\n" + m.inputField.View()
+	if m.currentBlock != nil && m.currentBlock.IsRunning {
+		// Replace input with a "Command Running" message of the same height to avoid jumpy UI
+		runningStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")).
+			Bold(true).
+			Width(m.width).
+			Padding(1, 2).
+			Height(3) // Match input field height (topBorder + newline + body)
+		bottomArea = "\n" + runningStyle.Render("⏳ COMMAND RUNNING... [Ctrl+C to stop]")
+	}
+
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		m.header.Render(),
 		viewArea,
-		"\n"+m.inputField.View(),
+		bottomArea,
 		"\n"+m.statusBar.Render(),
 	)
 }
