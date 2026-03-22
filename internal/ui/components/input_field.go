@@ -7,14 +7,14 @@ import (
 	"github.com/julioguillermo/jgsh/internal/syntax/ports"
 	"github.com/julioguillermo/jgsh/internal/ui/styles"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 // InputField represents a styled command input field.
 type InputField struct {
-	textInput   textinput.Model
+	textArea    textarea.Model
 	highlighter ports.Highlighter
 	width       int
 	label       string
@@ -25,18 +25,23 @@ type InputField struct {
 	originalWord    string
 	originalValue   string
 	cursorBefore    int
+
+	// Password mode
+	isPassword bool
 }
 
 // NewInputField creates a new InputField instance.
 func NewInputField(highlighter ports.Highlighter) *InputField {
-	ti := textinput.New()
-	ti.Placeholder = "Enter command..."
-	ti.Prompt = "" // Use our own prompt/header
-	ti.Focus()
+	ta := textarea.New()
+	ta.Placeholder = "Enter command..."
+	ta.Prompt = "" // Use our own prompt/header
+	ta.Focus()
 	// Set a visible cursor style by default using reverse for maximum visibility
-	ti.CursorStyle = lipgloss.NewStyle().Reverse(true)
+	ta.Cursor.Style = lipgloss.NewStyle().Reverse(true)
+	ta.ShowLineNumbers = false
+	ta.SetHeight(1) // Start with 1 line, will grow if needed
 	return &InputField{
-		textInput:   ti,
+		textArea:    ta,
 		highlighter: highlighter,
 		width:       80,
 		label:       " COMMAND ",
@@ -51,18 +56,19 @@ func (i *InputField) SetLabel(label string) {
 // SetWidth updates the width of the input field.
 func (i *InputField) SetWidth(w int) {
 	i.width = w
+	i.textArea.SetWidth(w - 4) // Account for padding/borders
 }
 
 // Init initializes the input field.
 func (i *InputField) Init() tea.Cmd {
-	return textinput.Blink
+	return textarea.Blink
 }
 
 // Update handles input events.
 func (i *InputField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Ensure focus is maintained
-	if !i.textInput.Focused() {
-		i.textInput.Focus()
+	if !i.textArea.Focused() {
+		i.textArea.Focus()
 	}
 
 	var cmd tea.Cmd
@@ -74,13 +80,52 @@ func (i *InputField) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	i.textInput, cmd = i.textInput.Update(msg)
+	i.textArea, cmd = i.textArea.Update(msg)
+
+	// Adjust height based on content
+	lines := strings.Split(i.textArea.Value(), "\n")
+	newHeight := len(lines)
+	if newHeight < 1 {
+		newHeight = 1
+	}
+	if newHeight > 10 { // Cap height
+		newHeight = 10
+	}
+	i.textArea.SetHeight(newHeight)
+
 	return i, cmd
+}
+
+// Position returns the current cursor position.
+func (i *InputField) Position() int {
+	// textarea uses (row, col) internally for cursor, but we need absolute position for completion
+	// Let's calculate it from the value and cursor position
+	val := i.textArea.Value()
+	cursorLine := i.textArea.Line()
+	cursorCol := i.textArea.LineInfo().CharOffset
+
+	lines := strings.Split(val, "\n")
+	pos := 0
+	for l := 0; l < cursorLine; l++ {
+		pos += utf8.RuneCountInString(lines[l]) + 1 // +1 for newline
+	}
+	pos += cursorCol
+	return pos
+}
+
+// Focus focuses the input field.
+func (i *InputField) Focus() tea.Cmd {
+	return i.textArea.Focus()
+}
+
+// Blur blurs the input field.
+func (i *InputField) Blur() {
+	i.textArea.Blur()
 }
 
 // View renders the input field with a modern boxed design.
 func (i *InputField) View() string {
-	value := i.textInput.Value()
+	value := i.textArea.Value()
 	titleText := styles.InputPromptStyle.Render(i.label)
 	titleWidth := lipgloss.Width(titleText)
 
@@ -97,22 +142,32 @@ func (i *InputField) View() string {
 	// Render content with cursor and highlighting
 	var inputContent string
 	if value == "" {
-		inputContent = i.textInput.View()
+		inputContent = i.textArea.View()
 	} else {
+		displayValue := value
+		if i.isPassword {
+			displayValue = strings.Repeat("*", utf8.RuneCountInString(value))
+		}
+
 		// Highlight the value
-		highlighted := i.highlighter.Highlight(value)
+		var highlighted string
+		if i.isPassword {
+			highlighted = displayValue
+		} else {
+			highlighted = i.highlighter.Highlight(value)
+		}
 
 		// Get cursor position and handle it manually to keep syntax highlighting
-		if !i.textInput.Focused() {
+		if !i.textArea.Focused() {
 			inputContent = highlighted
 		} else {
 			// Check blinking state from the original View
-			tiView := i.textInput.View()
+			tiView := i.textArea.View()
 			// If tiView contains the reverse escape code, the cursor is currently visible
 			showCursor := strings.Contains(tiView, "\x1b[7m") || strings.Contains(tiView, "\x1b[27m")
 
 			if showCursor {
-				pos := i.textInput.Position()
+				pos := i.Position()
 				inputContent = i.renderWithCursor(highlighted, pos)
 			} else {
 				inputContent = highlighted
@@ -138,7 +193,7 @@ func (i *InputField) renderWithCursor(highlighted string, pos int) string {
 	var cursorInserted bool
 
 	// Special case: cursor at the end
-	textLen := utf8.RuneCountInString(i.textInput.Value())
+	textLen := utf8.RuneCountInString(i.textArea.Value())
 
 	runes := []rune(highlighted)
 	for j := 0; j < len(runes); j++ {
@@ -154,7 +209,7 @@ func (i *InputField) renderWithCursor(highlighted string, pos int) string {
 				// Insert styled cursor. We wrap the next character if it exists.
 				// Since we are in a highlighted string, we might want to keep the color
 				// but change the background.
-				cursorStyle := i.textInput.CursorStyle
+				cursorStyle := i.textArea.Cursor.Style
 				if cursorStyle.GetBackground() == lipgloss.Color("") {
 					cursorStyle = cursorStyle.Reverse(true)
 				}
@@ -175,7 +230,7 @@ func (i *InputField) renderWithCursor(highlighted string, pos int) string {
 
 	// If cursor was at the end, append it
 	if !cursorInserted && pos >= textLen {
-		cursorStyle := i.textInput.CursorStyle
+		cursorStyle := i.textArea.Cursor.Style
 		if cursorStyle.GetBackground() == lipgloss.Color("") {
 			cursorStyle = cursorStyle.Reverse(true)
 		}
@@ -187,28 +242,34 @@ func (i *InputField) renderWithCursor(highlighted string, pos int) string {
 
 // Value returns the current text in the input field.
 func (i *InputField) Value() string {
-	return i.textInput.Value()
+	return i.textArea.Value()
 }
 
 // SetValue updates the current text in the input field.
 func (i *InputField) SetValue(s string) {
-	i.textInput.SetValue(s)
-	i.textInput.SetCursor(len(s))
+	i.textArea.SetValue(s)
+	// Reset cursor to end of text
+	lines := strings.Split(s, "\n")
+	i.textArea.SetCursor(utf8.RuneCountInString(lines[len(lines)-1]))
+}
+
+// InsertNewline inserts a newline at the current cursor position.
+func (i *InputField) InsertNewline() {
+	// textarea handles newlines natively with Enter.
+	// But the user specifically wants Shift+Enter to insert a newline.
+	// If we are calling this from bubble_tea_app.go, we should insert it manually.
+	i.textArea.InsertString("\n")
 }
 
 // SetPasswordMode toggles password masking.
 func (i *InputField) SetPasswordMode(on bool) {
-	if on {
-		i.textInput.EchoMode = textinput.EchoPassword
-		i.textInput.EchoCharacter = '*'
-	} else {
-		i.textInput.EchoMode = textinput.EchoNormal
-	}
+	i.isPassword = on
 }
 
 // Reset clears the input field.
 func (i *InputField) Reset() {
-	i.textInput.Reset()
+	i.textArea.Reset()
+	i.textArea.SetHeight(1)
 	i.ResetCompletion()
 }
 
@@ -228,8 +289,8 @@ func (i *InputField) SetCompletions(completions []string, word string) {
 	}
 	i.completions = completions
 	i.originalWord = word
-	i.originalValue = i.textInput.Value()
-	i.cursorBefore = i.textInput.Position()
+	i.originalValue = i.textArea.Value()
+	i.cursorBefore = i.Position()
 	i.completionIndex = 0
 	i.applyCompletion()
 }
@@ -260,16 +321,57 @@ func (i *InputField) applyCompletion() {
 	comp := i.completions[i.completionIndex]
 
 	// Replace the word at the cursor with the completion
-	start := i.cursorBefore - len(i.originalWord)
+	start := i.cursorBefore - utf8.RuneCountInString(i.originalWord)
 	if start < 0 {
 		start = 0
 	}
 
-	prefix := i.originalValue[:start]
-	suffix := i.originalValue[i.cursorBefore:]
+	// Work with runes for safe indexing
+	runes := []rune(i.originalValue)
+	prefix := string(runes[:start])
+	suffix := string(runes[i.cursorBefore:])
 
-	i.textInput.SetValue(prefix + comp + suffix)
-	i.textInput.SetCursor(len(prefix + comp))
+	newValue := prefix + comp + suffix
+	i.textArea.SetValue(newValue)
+
+	// Set cursor at the end of the completion
+	newPos := start + utf8.RuneCountInString(comp)
+	i.setAbsolutePosition(newPos)
+}
+
+func (i *InputField) setAbsolutePosition(pos int) {
+	// 1. Go to the beginning of the entire input
+	for i.textArea.Line() > 0 {
+		i.textArea.CursorUp()
+	}
+	i.textArea.CursorStart()
+
+	// 2. Count characters to find the target logical line and column
+	val := i.textArea.Value()
+	lines := strings.Split(val, "\n")
+	current := 0
+	targetRow := 0
+	targetCol := 0
+	for r, line := range lines {
+		lineLen := utf8.RuneCountInString(line)
+		if pos <= current+lineLen {
+			targetRow = r
+			targetCol = pos - current
+			break
+		}
+		current += lineLen + 1
+		if r == len(lines)-1 {
+			targetRow = r
+			targetCol = lineLen
+		}
+	}
+
+	// 3. Move to targetRow
+	for i.textArea.Line() < targetRow {
+		i.textArea.CursorDown()
+	}
+	// 4. Move to targetCol
+	i.textArea.SetCursor(targetCol)
 }
 
 // IsCycling returns true if the input field is currently cycling completions.
@@ -285,9 +387,4 @@ func (i *InputField) Completions() []string {
 // CompletionIndex returns the current completion index.
 func (i *InputField) CompletionIndex() int {
 	return i.completionIndex
-}
-
-// Position returns the current cursor position.
-func (i *InputField) Position() int {
-	return i.textInput.Position()
 }

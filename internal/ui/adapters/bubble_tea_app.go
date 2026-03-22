@@ -313,6 +313,9 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case "shift+enter", "alt+enter":
+			m.inputField.InsertNewline()
+			return m, nil
 		case "enter":
 			if m.completionSelector.IsActive() {
 				m.completionSelector.Deactivate()
@@ -372,6 +375,7 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentBlock.IsRunning = true
 
 			m.inputField.Reset()
+			return m, tea.Batch(cmds...)
 		}
 	case ShellMsg:
 		msgStr := string(msg)

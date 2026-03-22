@@ -9,8 +9,15 @@ import (
 	"github.com/julioguillermo/jgsh/internal/ui/styles"
 )
 
-func Title(title string, width int, duration time.Duration, isRunning bool) string {
-	titleText := fmt.Sprintf(" %s ", title)
+func Title(label string, content string, width int, duration time.Duration, isRunning bool) string {
+	// If content is multi-line, take only the first line and add ellipsis
+	displayContent := content
+	if strings.Contains(content, "\n") {
+		displayContent = strings.Split(content, "\n")[0] + "..."
+	}
+
+	// Clean up ANSI for width calculation
+	titleText := fmt.Sprintf(" %s: %s ", label, displayContent)
 	titleWidth := lipgloss.Width(titleText)
 
 	// Meta info (duration/status)
