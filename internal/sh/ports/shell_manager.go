@@ -10,5 +10,6 @@ type ShellManager interface {
 	GetReader() io.Reader
 	GetWriter() io.Writer
 	GetPID() int
+	SetSize(rows, cols int) error
 	Stop() error
 }

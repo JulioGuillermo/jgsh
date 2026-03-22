@@ -30,7 +30,7 @@ func (p *PTYProxy) Start() error {
 	p.command = exec.Command("/bin/bash", "--norc")
 
 	p.command.Env = append(os.Environ(),
-		"PS1=GLOCK> ",
+		"PS1=JGSH> ",
 		"TERM=xterm-256color",
 	)
 
@@ -81,6 +81,17 @@ func (p *PTYProxy) GetPID() int {
 		return p.command.Process.Pid
 	}
 	return 0
+}
+
+// SetSize updates the PTY's internal dimensions.
+func (p *PTYProxy) SetSize(rows, cols int) error {
+	if p.ptyFile == nil {
+		return io.ErrClosedPipe
+	}
+	return pty.Setsize(p.ptyFile, &pty.Winsize{
+		Rows: uint16(rows),
+		Cols: uint16(cols),
+	})
 }
 
 // Stop terminates the shell session.

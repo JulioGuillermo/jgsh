@@ -15,9 +15,6 @@ func StripAnsi(str string) string {
 	result := ansiCSI.ReplaceAllString(str, "")
 	result = ansiOSC.ReplaceAllString(result, "")
 
-	// Remove carriage returns and other control chars that mess up TUI rendering
-	result = strings.ReplaceAll(result, "\r", "")
-
 	// Remove other common ESC sequences like ESC = (application keypad)
 	result = regexp.MustCompile(`\x1b[=>]`).ReplaceAllString(result, "")
 
@@ -41,11 +38,44 @@ func IsPasswordPrompt(output string) bool {
 	return false
 }
 
+// FoldCarriageReturns processes a string and simulates terminal behavior for \r.
+func FoldCarriageReturns(input string) string {
+	if !strings.Contains(input, "\r") {
+		return input
+	}
+
+	lines := strings.Split(input, "\n")
+	var result []string
+
+	for _, line := range lines {
+		if !strings.Contains(line, "\r") {
+			result = append(result, line)
+			continue
+		}
+
+		// Handle \r by keeping only the text after the last \r
+		// but only if it's not at the very end.
+		parts := strings.Split(line, "\r")
+		// The actual terminal behavior is more complex (overwriting character by character),
+		// but for progress bars, the last part is almost always what we want.
+		lastPart := ""
+		for i := len(parts) - 1; i >= 0; i-- {
+			if strings.TrimSpace(parts[i]) != "" || i == 0 {
+				lastPart = parts[i]
+				break
+			}
+		}
+		result = append(result, lastPart)
+	}
+
+	return strings.Join(result, "\n")
+}
+
 // DetectPrompt checks if the given buffer ends with a shell prompt.
 func DetectPrompt(buffer []byte) bool {
-	// 1. Check for our special GLOCK prompt first
+	// 1. Check for our special JGSH prompt first - this is the MOST reliable way
 	sRaw := string(buffer)
-	if strings.Contains(sRaw, "GLOCK> ") {
+	if strings.Contains(sRaw, "JGSH> ") {
 		return true
 	}
 
@@ -61,10 +91,16 @@ func DetectPrompt(buffer []byte) bool {
 	}
 
 	// Common prompt endings (multibyte safe)
-	endings := []string{"$", "#", "%", "", ">", "➜", "❯"}
+	// We REMOVE '%' from this list because it's used in progress bars (pacman, wget, etc.)
+	endings := []string{"$", "#", "", ">", "➜", "❯"}
 	for _, e := range endings {
 		if strings.HasSuffix(s, e) {
-			return true
+			// Ensure it's not just a character in the middle of a string
+			// We only want to detect prompts that are at the beginning of a line or after a space
+			idx := strings.LastIndex(s, e)
+			if idx == 0 || (idx > 0 && (s[idx-1] == ' ' || s[idx-1] == '\n')) {
+				return true
+			}
 		}
 	}
 
@@ -73,6 +109,9 @@ func DetectPrompt(buffer []byte) bool {
 
 // StripPrompt removes trailing prompt lines from the output.
 func StripPrompt(output string) string {
+	// First, specifically remove our custom prompt if it exists anywhere in the trailing lines
+	output = strings.ReplaceAll(output, "JGSH> ", "")
+
 	lines := strings.Split(strings.TrimRight(output, "\n "), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
 		if DetectPrompt([]byte(lines[i])) {

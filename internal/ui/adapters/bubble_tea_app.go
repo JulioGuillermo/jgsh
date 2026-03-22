@@ -50,6 +50,7 @@ type BubbleTeaApp struct {
 	completionEngine   *logic.CompletionEngine
 	historyCmds        []string
 	customFullScreen   []string
+	completionWarn     string
 	historyIndex       int
 	draftCommand       string
 	ready              bool
@@ -65,22 +66,26 @@ func NewBubbleTeaApp(shellManager ports.ShellManager, inputField *components.Inp
 	config := logic.NewConfigManager()
 	customFS := config.LoadFullscreenCommands()
 
+	compEngine := logic.NewCompletionEngine()
+	_, compWarn := compEngine.CheckDependencies()
+
 	return &BubbleTeaApp{
 		shellManager:       shellManager,
 		inputField:         inputField,
 		blockCard:          components.NewBlockCard(highlighter),
 		historySearch:      components.NewHistorySearch(),
 		completionSelector: components.NewCompletionSelector(),
-		header:             &components.Header{Title: "🚀 PROJECT GLOCK"},
+		header:             &components.Header{Title: "🚀 JGSH"},
 		statusBar:          &components.StatusBar{},
 		viewport:           viewport.New(0, 0),
 		highlighter:        highlighter,
 		blocks:             make([]domain.Block, 0),
 		history:            history,
 		config:             config,
-		completionEngine:   logic.NewCompletionEngine(),
+		completionEngine:   compEngine,
 		historyCmds:        histCmds,
 		customFullScreen:   customFS,
+		completionWarn:     compWarn,
 		historyIndex:       -1,
 		currentBlock: &domain.Block{
 			Command: "",
@@ -145,6 +150,9 @@ func (m *BubbleTeaApp) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = m.width
 		m.viewport.Height = m.height - 10
 		m.ready = true
+
+		// Sync PTY size with UI size for proper command rendering (progress bars, etc.)
+		_ = m.shellManager.SetSize(m.viewport.Height, m.viewport.Width)
 
 	case tea.MouseMsg:
 		if !m.ready {
@@ -449,12 +457,13 @@ func (m *BubbleTeaApp) findBlockByY(y int) *domain.Block {
 func (m *BubbleTeaApp) renderAllBlocks() string {
 	var b strings.Builder
 	for i, block := range m.blocks {
-		b.WriteString(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, block.Output, m.viewport.Width-3, block.Duration, false))
+		out := logic.FoldCarriageReturns(block.Output)
+		b.WriteString(m.blockCard.Render(fmt.Sprintf("BLOCK %d", i), block.Command, out, m.viewport.Width-3, block.Duration, false))
 		b.WriteString("\n")
 	}
 
 	if m.currentBlock != nil && m.currentBlock.Command != "" {
-		out := m.currentBlock.Output
+		out := logic.FoldCarriageReturns(m.currentBlock.Output)
 		if !m.currentBlock.IsRunning {
 			out = logic.StripEcho(out, m.currentBlock.Command)
 			out = logic.StripPrompt(out)
@@ -504,6 +513,7 @@ func (m *BubbleTeaApp) View() string {
 	m.statusBar.Project = logic.GetProjectInfo(m.statusBar.CWD)
 	m.statusBar.Venv = logic.GetVenvInfo()
 	m.statusBar.Time = time.Now().Format("15:04:05")
+	m.statusBar.Notification = m.completionWarn
 	m.statusBar.Completions = m.inputField.Completions()
 	m.statusBar.CompletionIndex = m.inputField.CompletionIndex()
 

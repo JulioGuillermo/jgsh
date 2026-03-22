@@ -16,6 +16,7 @@ type StatusBar struct {
 	Project         string
 	Venv            string
 	Time            string
+	Notification    string
 	Completions     []string
 	CompletionIndex int
 }
@@ -107,8 +108,17 @@ func (s *StatusBar) Render() string {
 
 	timePart := timeStyle.Render(" 󱑎 " + s.Time + " ")
 
+	// Notification part
+	notificationPart := ""
+	if s.Notification != "" {
+		notificationPart = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("3")). // Yellow/Orange
+			Bold(true).
+			Render(" " + s.Notification)
+	}
+
 	// Build left side
-	leftSide := cwdStyle.Render(cwdText) + gitPart + projectPart + venvPart
+	leftSide := cwdStyle.Render(cwdText) + gitPart + projectPart + venvPart + notificationPart
 
 	// Calculate widths
 	leftWidth := lipgloss.Width(leftSide)

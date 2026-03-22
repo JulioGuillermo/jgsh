@@ -1,7 +1,6 @@
 package components
 
 import (
-	"strings"
 	"time"
 
 	"github.com/julioguillermo/jgsh/internal/syntax/ports"
@@ -25,13 +24,10 @@ func (b *BlockCard) Render(title string, cmd string, output string, width int, d
 	cmdPart := b.Highlighter.Highlight(cmd)
 	topBorder := Title(cmdPart, width, duration, isRunning)
 
-	// Ensure content is clean
-	outPart := strings.ReplaceAll(output, "\r", "")
-
 	body := styles.BaseBlockStyle.
 		BorderTop(false).
 		Width(width).
-		Render(outPart)
+		Render(output)
 
 	return topBorder + "\n" + body
 }
