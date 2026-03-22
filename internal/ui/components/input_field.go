@@ -40,6 +40,13 @@ func NewInputField(highlighter ports.Highlighter) *InputField {
 	ta.Cursor.Style = lipgloss.NewStyle().Reverse(true)
 	ta.ShowLineNumbers = false
 	ta.SetHeight(1) // Start with 1 line, will grow if needed
+
+	// Remove backgrounds from focused and blurred styles
+	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
+	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
+	ta.FocusedStyle.Base = lipgloss.NewStyle()
+	ta.BlurredStyle.Base = lipgloss.NewStyle()
+
 	return &InputField{
 		textArea:    ta,
 		highlighter: highlighter,
